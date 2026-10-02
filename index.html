@@ -1,0 +1,830 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#1a1a1a">
+    <title>Traffic ETA 1.2</title>
+    <style>
+        :root {
+            --font-size: 15px;
+        }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background-color: #1a1a1a;
+            color: #ffffff;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang HK', 'Microsoft YaHei', 'Heiti TC', sans-serif;
+            font-size: var(--font-size);
+            line-height: 1.3;
+            overflow-x: hidden;
+            -webkit-text-size-adjust: none;
+        }
+        .title {
+            font-size: var(--font-size);
+            padding: 2px 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+        }
+        th, td {
+            text-align: left;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            padding: 2px 4px;
+            vertical-align: middle;
+            font-size: var(--font-size);
+        }
+        th:nth-child(1), td:nth-child(1) { width: 20%; }
+        th:nth-child(2), td:nth-child(2) { width: 20%; }
+        th:nth-child(3), td:nth-child(3) { width: 28%; }
+        th:nth-child(4), td:nth-child(4) { width: 32%; }
+        .route-badge {
+            display: inline-block;
+            background-color: #0066cc;
+            color: #ffffff;
+            padding: 1px 4px;
+            border-radius: 2px;
+            white-space: nowrap;
+        }
+        .eta-container {
+            display: flex;
+            gap: 2px;
+            align-items: center;
+        }
+        .eta-badge {
+            display: inline-block;
+            padding: 1px 4px;
+            border-radius: 2px;
+            min-width: 1.5em;
+            text-align: center;
+            white-space: nowrap;
+            color: #ffffff;
+        }
+        .eta-red { background-color: #cc0000; }
+        .eta-orange { background-color: #cc6600; }
+        .eta-green { background-color: #006600; }
+    </style>
+</head>
+<body>
+    <div class="title" id="title">出門交通</div>
+    <table>
+        <thead>
+            <tr>
+                <th>開往</th>
+                <th>路線</th>
+                <th>車站</th>
+                <th>距離到站(分鐘)</th>
+            </tr>
+        </thead>
+        <tbody id="eta-body"></tbody>
+    </table>
+    <script>
+        // ===== JPG Schedule Data (from SL-to-WC-schedule-bus-timetable.jpeg) =====
+        // Times in HHMM format. Column 1 = Mon-Fri, Column 2 = Sat
+        const jpgSchedules = {
+            'SL-to-WC-schedule-bus-timetable.jpeg': {
+                columns: {
+                    1: [710, 730, 740, 750, 800, 810, 820, 835], // Mon-Fri
+                    2: [750]                                      // Saturday
+                }
+            }
+        };
+
+        // ===== Bus ETA Instructions =====
+        // Format: busCoId route direction stopName targetSrc
+        const busInstructions = [
+            { busCoId: "屋苑", route: "邨巴", direction: "灣仔",             stopName: "兆麟苑",           targetSrc: "SL-to-WC-schedule-bus-timetable.jpeg" },
+            { busCoId: "CTB",  route: "962X", direction: "銅鑼灣",           stopName: "老鼠洲兒童遊樂場", targetSrc: "https://rt.data.gov.hk/v2/transport/citybus/eta/ctb/001922/962X" },
+            { busCoId: "CTB",  route: "B3",   direction: "深圳灣巳岸",       stopName: "老鼠洲兒童遊樂場", targetSrc: "https://rt.data.gov.hk/v2/transport/citybus/eta/ctb/001922/B3" },
+            { busCoId: "KMB",  route: "60X",  direction: "高鐵西九龍站",     stopName: "兆麟苑",           targetSrc: "https://data.etabus.gov.hk/v1/transport/kmb/eta/07B714029E91FD81/60X/1" },
+            { busCoId: "KMB",  route: "61X",  direction: "九龍城碼頭巴士總站", stopName: "兆麟苑",           targetSrc: "https://data.etabus.gov.hk/v1/transport/kmb/eta/07B714029E91FD81/61X/1" },
+            { busCoId: "KMB",  route: "60M",  direction: "荃灣",             stopName: "兆麟苑",           targetSrc: "https://data.etabus.gov.hk/v1/transport/kmb/eta/07B714029E91FD81/60M/1" },
+            { busCoId: "KMB",  route: "62X",  direction: "鯉魚門",           stopName: "兆麟苑",           targetSrc: "https://data.etabus.gov.hk/v1/transport/kmb/eta/07B714029E91FD81/62X/1" },
+            { busCoId: "KMB",  route: "261",  direction: "祥和總站",         stopName: "三聖總站",         targetSrc: "https://data.etabus.gov.hk/v1/transport/kmb/route-stop/261/outbound/1" },
+            { busCoId: "KMB",  route: "61M",  direction: "荔景北",           stopName: "三聖總站",         targetSrc: "https://data.etabus.gov.hk/v1/transport/kmb/eta/A2586669ADE21A28/61M/1" },
+            { busCoId: "KMB",  route: "61M",  direction: "屯門海榮路",       stopName: "三聖總站",         targetSrc: "https://data.etabus.gov.hk/v1/transport/kmb/eta/9D88EE061FF5E1D0/61M/1" },
+            { busCoId: "KMB",  route: "A33X", direction: "機場地面運輸中心", stopName: "兆麟苑",           targetSrc: "https://data.etabus.gov.hk/v1/transport/kmb/eta/1D44677AEFBA8773/A33X/1" },
+            { busCoId: "KMB",  route: "E33",  direction: "機場地面運輸中心", stopName: "兆麟苑",           targetSrc: "https://data.etabus.gov.hk/v1/transport/kmb/eta/1D44677AEFBA8773/E33/1" },
+            { busCoId: "KMB",  route: "263",  direction: "沙田站",           stopName: "兆麟苑",           targetSrc: "https://data.etabus.gov.hk/v1/transport/kmb/eta/07B714029E91FD81/263/1" }
+        ];
+
+        // ===== Cache for route-stop stop IDs =====
+        const stopIdCache = {};
+
+        // ===== HK Public Holidays cache (for JPG schedule column selection) =====
+        let hkHolidays = null;
+
+        async function getHKHolidays() {
+            if (hkHolidays) return hkHolidays;
+            try {
+                var now = new Date();
+                var hkYear = new Intl.DateTimeFormat('en-GB', {
+                    timeZone: 'Asia/Hong_Kong',
+                    year: 'numeric'
+                }).format(now);
+                var json = await fetchUrl('https://date.nager.at/api/v3/PublicHolidays/' + hkYear + '/HK', true);
+                if (!json || !Array.isArray(json)) return new Set();
+                var holidays = new Set();
+                for (var i = 0; i < json.length; i++) {
+                    if (json[i].date) holidays.add(json[i].date);
+                }
+                hkHolidays = holidays;
+                return holidays;
+            } catch (e) {
+                return new Set();
+            }
+        }
+
+        async function getDayType() {
+            var now = new Date();
+            var parts = new Intl.DateTimeFormat('en-GB', {
+                timeZone: 'Asia/Hong_Kong',
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                weekday: 'short'
+            }).formatToParts(now);
+            var year = '', month = '', day = '', weekday = '';
+            for (var i = 0; i < parts.length; i++) {
+                if (parts[i].type === 'year') year = parts[i].value;
+                if (parts[i].type === 'month') month = parts[i].value;
+                if (parts[i].type === 'day') day = parts[i].value;
+                if (parts[i].type === 'weekday') weekday = parts[i].value;
+            }
+            var today = year + '-' + month + '-' + day;
+            var weekdayMap = { 'Sun': 0, 'Mon': 1, 'Tue': 2, 'Wed': 3, 'Thu': 4, 'Fri': 5, 'Sat': 6 };
+            var dow = weekdayMap[weekday] !== undefined ? weekdayMap[weekday] : now.getDay();
+            var holidays = await getHKHolidays();
+            if (holidays.has(today)) return 0; // Public holiday → no service
+            if (dow === 0) return 0;           // Sunday → no service
+            if (dow === 6) return 2;            // Saturday → Column 2
+            return 1;                          // Mon-Fri → Column 1
+        }
+
+        // ===== Fetch with timeout and CORS proxy fallback =====
+        async function fetchUrl(url, expectJson) {
+            if (expectJson === undefined) expectJson = true;
+            // Try direct fetch
+            try {
+                const ctrl = new AbortController();
+                const tid = setTimeout(function () { ctrl.abort(); }, 8000);
+                const resp = await fetch(url, { signal: ctrl.signal });
+                clearTimeout(tid);
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                if (expectJson) return await resp.json();
+                return await resp.text();
+            } catch (directErr) {
+                // Fallback: CORS proxy
+                var proxies = [
+                    function (u) { return 'https://corsproxy.io/?url=' + encodeURIComponent(u); },
+                    function (u) { return 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u); }
+                ];
+                for (var i = 0; i < proxies.length; i++) {
+                    try {
+                        var pUrl = proxies[i](url);
+                        var ctrl2 = new AbortController();
+                        var tid2 = setTimeout(function () { ctrl2.abort(); }, 8000);
+                        var resp2 = await fetch(pUrl, { signal: ctrl2.signal });
+                        clearTimeout(tid2);
+                        if (!resp2.ok) continue;
+                        if (expectJson) return await resp2.json();
+                        return await resp2.text();
+                    } catch (proxyErr) {
+                        continue;
+                    }
+                }
+                return null;
+            }
+        }
+
+        // ===== Format date/time for title (HK timezone) =====
+        function formatDateTime() {
+            var now = new Date();
+            var parts = new Intl.DateTimeFormat('en-GB', {
+                timeZone: 'Asia/Hong_Kong',
+                day: '2-digit',
+                month: 'short',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: false
+            }).formatToParts(now);
+            function getPart(type) {
+                for (var i = 0; i < parts.length; i++) {
+                    if (parts[i].type === type) return parts[i].value;
+                }
+                return '';
+            }
+            return getPart('day') + '-' + getPart('month') + '-' + getPart('year') + ' ' +
+                   getPart('hour') + ':' + getPart('minute') + ':' + getPart('second');
+        }
+
+        function updateTitle() {
+            document.getElementById('title').textContent = '出門交通 ' + formatDateTime();
+        }
+
+        // ===== Calculate ETA in minutes from timestamp =====
+        function calcEtaMinutes(etaTimestamp) {
+            var etaTime = new Date(etaTimestamp);
+            var now = new Date();
+            var diffMs = etaTime - now;
+            var diffMin = Math.round(diffMs / 60000);
+            return diffMin;
+        }
+
+        // ===== Get ETA color class =====
+        function getEtaColorClass(eta) {
+            if (eta < 9) return 'eta-red';
+            if (eta <= 15) return 'eta-orange';
+            return 'eta-green';
+        }
+
+        // ===== Fetch ETA from JPG schedule file =====
+        async function fetchJpgETA(instruction) {
+            var schedule = jpgSchedules[instruction.targetSrc];
+            if (!schedule) return [0];
+
+            var dayType = await getDayType();
+            if (dayType === 0) return [0]; // No service on holidays/Sundays
+
+            var times = schedule.columns[dayType];
+            if (!times || times.length === 0) return [0];
+
+            // Get current time in HK timezone
+            var now = new Date();
+            var parts = new Intl.DateTimeFormat('en-GB', {
+                timeZone: 'Asia/Hong_Kong',
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false
+            }).formatToParts(now);
+            var hkHour = 0, hkMinute = 0;
+            for (var i = 0; i < parts.length; i++) {
+                if (parts[i].type === 'hour') hkHour = parseInt(parts[i].value, 10);
+                if (parts[i].type === 'minute') hkMinute = parseInt(parts[i].value, 10);
+            }
+            var currentMinutes = hkHour * 60 + hkMinute;
+
+            // Find next 3 bus times after current time
+            var etas = [];
+            for (var k = 0; k < times.length; k++) {
+                var busHour = Math.floor(times[k] / 100);
+                var busMinute = times[k] % 100;
+                var busMinutes = busHour * 60 + busMinute;
+                var diff = busMinutes - currentMinutes;
+                if (diff >= 0) {
+                    etas.push(diff);
+                }
+            }
+
+            if (etas.length === 0) return [0]; // No more buses today
+            return etas.slice(0, 3);
+        }
+
+        // ===== Fetch ETA from API URL =====
+        async function fetchETA(instruction) {
+            try {
+                if (!instruction.targetSrc.startsWith('https://')) {
+                    // JPG file schedule
+                    return await fetchJpgETA(instruction);
+                }
+
+                if (instruction.targetSrc.indexOf('/route-stop/') !== -1) {
+                    return await fetchRouteStopETA(instruction);
+                }
+
+                // Direct ETA API
+                var json = await fetchUrl(instruction.targetSrc, true);
+                if (!json) return null;
+
+                var etas = [];
+
+                // Format 1: data is an array with eta timestamps (KMB/CTB)
+                if (Array.isArray(json.data)) {
+                    for (var i = 0; i < json.data.length; i++) {
+                        var item = json.data[i];
+                        if (item.eta) {
+                            var dm = calcEtaMinutes(item.eta);
+                            if (dm >= 0) etas.push(dm);
+                        }
+                    }
+                }
+                // Format 2: data.eta is an array with diff values (GMB/ETA-Route-Stop)
+                else if (json.data && Array.isArray(json.data.eta)) {
+                    for (var j = 0; j < json.data.eta.length; j++) {
+                        var e = json.data.eta[j];
+                        if (e.diff != null) {
+                            etas.push(e.diff);
+                        } else if (e.eta) {
+                            var dm2 = calcEtaMinutes(e.eta);
+                            if (dm2 >= 0) etas.push(dm2);
+                        }
+                    }
+                }
+
+                return etas.slice(0, 3);
+            } catch (err) {
+                return null;
+            }
+        }
+
+        // ===== Fetch ETA for route-stop URL (KMB 261) =====
+        // The route-stop API returns a list of stops (IDs only).
+        // We need to find the stop matching stopName via the stop details API,
+        // then fetch its stop-eta (which returns ETAs for all routes at that stop).
+        async function fetchRouteStopETA(instruction) {
+            var cacheKey = instruction.targetSrc;
+            var stopId = stopIdCache[cacheKey];
+
+            // Extract direction from URL (outbound → O, inbound → I)
+            var dirMatch = instruction.targetSrc.match(/\/(outbound|inbound)\//);
+            var dirCode = dirMatch ? (dirMatch[1] === 'outbound' ? 'O' : 'I') : null;
+
+            if (!stopId) {
+                // Step 1: Fetch route-stop list
+                var rsJson = await fetchUrl(instruction.targetSrc, true);
+                if (!rsJson || !Array.isArray(rsJson.data)) return null;
+
+                var stopIds = [];
+                for (var i = 0; i < rsJson.data.length; i++) {
+                    if (rsJson.data[i].stop) stopIds.push(rsJson.data[i].stop);
+                }
+
+                // Step 2: Fetch stop details in parallel to find matching name
+                var promises = stopIds.map(function (sid) {
+                    return fetchUrl('https://data.etabus.gov.hk/v1/transport/kmb/stop/' + sid, true)
+                        .then(function (json) { return { sid: sid, json: json }; })
+                        .catch(function () { return { sid: sid, json: null }; });
+                });
+                var results = await Promise.all(promises);
+                for (var i = 0; i < results.length; i++) {
+                    if (results[i].json && results[i].json.data) {
+                        var nameTc = results[i].json.data.name_tc || '';
+                        if (nameTc.indexOf(instruction.stopName) !== -1) {
+                            stopId = results[i].sid;
+                            stopIdCache[cacheKey] = stopId;
+                            break;
+                        }
+                    }
+                }
+                if (!stopId) return null;
+            }
+
+            // Step 3: Fetch stop-eta for the matched stop
+            var etaJson = await fetchUrl('https://data.etabus.gov.hk/v1/transport/kmb/stop-eta/' + stopId, true);
+            if (!etaJson || !Array.isArray(etaJson.data)) return null;
+
+            // Filter by route and direction
+            var etas = [];
+            for (var i = 0; i < etaJson.data.length; i++) {
+                var item = etaJson.data[i];
+                if (item.route === instruction.route && item.eta) {
+                    if (dirCode && item.dir && item.dir !== dirCode) continue;
+                    var dm = calcEtaMinutes(item.eta);
+                    if (dm >= 0) etas.push(dm);
+                }
+            }
+            return etas.slice(0, 3);
+        }
+
+        // ===== Render table =====
+        async function renderTable() {
+            var tbody = document.getElementById('eta-body');
+            tbody.innerHTML = '';
+
+            // Fetch all ETAs in parallel
+            var promises = busInstructions.map(function (inst) { return fetchETA(inst); });
+            var results = await Promise.all(promises);
+
+            for (var i = 0; i < busInstructions.length; i++) {
+                var inst = busInstructions[i];
+                var etas = results[i];
+
+                // Skip route if no ETAs (no more buses today)
+                if (!etas || etas.length === 0) continue;
+
+                var tr = document.createElement('tr');
+
+                // Direction
+                var tdDir = document.createElement('td');
+                tdDir.textContent = inst.direction;
+                tr.appendChild(tdDir);
+
+                // Route (blue badge, no bus company id)
+                var tdRoute = document.createElement('td');
+                var routeBadge = document.createElement('span');
+                routeBadge.className = 'route-badge';
+                routeBadge.textContent = inst.route;
+                tdRoute.appendChild(routeBadge);
+                tr.appendChild(tdRoute);
+
+                // Stop name
+                var tdStop = document.createElement('td');
+                tdStop.textContent = inst.stopName;
+                tr.appendChild(tdStop);
+
+                // ETAs (colored badges)
+                var tdEta = document.createElement('td');
+                var etaContainer = document.createElement('div');
+                etaContainer.className = 'eta-container';
+                for (var j = 0; j < etas.length; j++) {
+                    var badge = document.createElement('span');
+                    badge.className = 'eta-badge ' + getEtaColorClass(etas[j]);
+                    badge.textContent = etas[j];
+                    etaContainer.appendChild(badge);
+                }
+                tdEta.appendChild(etaContainer);
+                tr.appendChild(tdEta);
+
+                tbody.appendChild(tr);
+            }
+        }
+
+        // ===== Auto-refresh (hidden, every 10 seconds) =====
+        var refreshing = false;
+        async function refreshETAs() {
+            if (refreshing) return;
+            refreshing = true;
+            try {
+                await renderTable();
+            } finally {
+                refreshing = false;
+            }
+        }
+
+        // ===== Set font size based on device =====
+        function setFontSize() {
+            var ua = navigator.userAgent;
+            var isIPad = /iPad/i.test(ua) ||
+                (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+            var isAndroidTablet = /Android/i.test(ua) && !/Mobile/i.test(ua);
+            var size = 15; // smartphone default
+            if (isIPad) size = 50;
+            else if (isAndroidTablet) size = 40;
+            document.documentElement.style.setProperty('--font-size', size + 'px');
+        }
+
+        // ===== Initialize =====
+        setFontSize();
+        updateTitle();
+        refreshETAs();
+        setInterval(updateTitle, 1000);
+        setInterval(refreshETAs, 10000);
+    </script>
+<script data-pplx-inline-edit>
+(function () {
+  if (window === window.top) return;
+
+  const allowedParentOrigins = ["https://www.perplexity.ai","https://perplexity.ai","https://testing.perplexity.ai","https://staging.perplexity.ai","https://*.preview.i.perplexity.ai","http://perplexity.localhost","http://localhost:1420","http://127.0.0.1:1420","http://localhost:3000","http://127.0.0.1:3000","http://localhost:5173","http://127.0.0.1:5173"];
+  const MAX_FONT_BYTES = 500 * 1024;
+  const MAX_TOTAL_FONT_BYTES = 2 * 1024 * 1024;
+  const DEFAULT_LINE_HEIGHT = 16;
+  let scrollForwarding = false;
+  let scrollRaf = 0;
+  let trustedTopOrigin = null;
+
+  // Allow entries like "https://*.preview.i.perplexity.ai" — the wildcard
+  // matches a single DNS label (no dots), so "https://*.foo" cannot stretch
+  // across multiple labels.
+  function matchesAllowedOrigin(origin) {
+    if (!origin) return false;
+    for (const entry of allowedParentOrigins) {
+      if (!entry.includes("*")) {
+        if (entry === origin) return true;
+        continue;
+      }
+      const pattern = new RegExp(
+        "^" +
+          entry.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^.]+") +
+          "$",
+      );
+      if (pattern.test(origin)) return true;
+    }
+    return false;
+  }
+
+  // Trust decision: when the sender is same-origin-visible (event.origin is a
+  // real origin like https://www.perplexity.ai) we trust event.origin directly.
+  // When event.origin is "null" (opaque broker srcdoc), we fall back to the
+  // broker's stamped `parentOrigin` to identify the top window. The fallback
+  // is claim-only — we rely on the browser's native `targetOrigin` enforcement
+  // on the response path (see postToTrustedTop) to ensure replies can't be
+  // delivered to anyone but the actual top window of that claimed origin.
+  function getTrustedParentOrigin(event) {
+    const forwardedParentOrigin =
+      typeof event.data.parentOrigin === "string" ? event.data.parentOrigin : null;
+    const parentOrigin = event.origin === "null" ? forwardedParentOrigin : event.origin;
+    return matchesAllowedOrigin(parentOrigin) ? parentOrigin : null;
+  }
+
+  // All responses go to window.top with targetOrigin = the allowlisted origin.
+  // An attacker that iframes us inside their own null-origin broker can claim
+  // any parentOrigin they like, but the browser will drop the reply whenever
+  // the real top's origin doesn't match — so the screenshot never leaves.
+  function postToTrustedTop(message) {
+    if (!trustedTopOrigin) return;
+    try {
+      window.top.postMessage(message, trustedTopOrigin);
+    } catch (_error) {}
+  }
+
+  function inlineAll(original, clone) {
+    if (original.nodeType !== 1 || clone.nodeType !== 1) return;
+
+    try {
+      const computedStyle = getComputedStyle(original);
+      // cssText on a computed style is the serialized declaration in modern
+      // Chromium/Safari — a single read beats enumerating ~400 longhand
+      // properties. Firefox returns "" here, so we fall back on empty.
+      const serialized = computedStyle.cssText;
+      if (serialized) {
+        clone.style.cssText = serialized;
+      } else {
+        const parts = new Array(computedStyle.length);
+        for (let index = 0; index < computedStyle.length; index += 1) {
+          const property = computedStyle[index];
+          parts[index] = `${property}:${computedStyle.getPropertyValue(property)};`;
+        }
+        clone.style.cssText = parts.join("");
+      }
+    } catch (_error) {}
+
+    const originalChildren = original.children;
+    const clonedChildren = clone.children;
+    for (
+      let index = 0;
+      index < originalChildren.length && index < clonedChildren.length;
+      index += 1
+    ) {
+      inlineAll(originalChildren[index], clonedChildren[index]);
+    }
+  }
+
+  function extractFontUrl(srcValue) {
+    const matches = [
+      ...srcValue.matchAll(
+        /url\(["']?([^"')]+)["']?\)(?:\s*format\(["']?([^"')]+)["']?\))?/gi,
+      ),
+    ];
+    if (matches.length === 0) return null;
+    const woff2 = matches.find((m) => m[2] && m[2].toLowerCase().includes("woff2"));
+    if (woff2) return woff2[1];
+    const woff = matches.find((m) => m[2] && m[2].toLowerCase().includes("woff"));
+    if (woff) return woff[1];
+    return matches[0][1];
+  }
+
+  // Cache resolved font URL -> data URI across captures. Fonts on a page
+  // essentially never change, and a batch run emits multiple captures back to
+  // back — without this we'd refetch + re-base64 every time.
+  const fontDataUriCache = new Map();
+  const SRC_DECLARATION_RE = /src\s*:\s*[^;}]+/i;
+
+  async function fetchAsDataUri(url) {
+    if (fontDataUriCache.has(url)) return fontDataUriCache.get(url);
+    let dataUri = null;
+    try {
+      const response = await fetch(url, { mode: "cors", credentials: "omit" });
+      if (response.ok) {
+        const blob = await response.blob();
+        if (blob.size <= MAX_FONT_BYTES) {
+          dataUri = await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () =>
+              resolve(typeof reader.result === "string" ? reader.result : null);
+            reader.onerror = () => resolve(null);
+            reader.readAsDataURL(blob);
+          });
+        }
+      }
+    } catch (_error) {
+      dataUri = null;
+    }
+    fontDataUriCache.set(url, dataUri);
+    return dataUri;
+  }
+
+  function collectFontFaceRuleTexts() {
+    const rules = [];
+    for (const sheet of document.styleSheets) {
+      let cssRules;
+      try {
+        cssRules = sheet.cssRules;
+      } catch (_error) {
+        continue;
+      }
+      if (!cssRules) continue;
+      for (const rule of cssRules) {
+        const cssText = rule.cssText || "";
+        if (cssText.startsWith("@font-face")) rules.push(cssText);
+      }
+    }
+    return rules;
+  }
+
+  async function buildInlinedFontCss() {
+    const ruleTexts = collectFontFaceRuleTexts();
+    if (ruleTexts.length === 0) return null;
+
+    const resolved = ruleTexts.map((cssText) => {
+      if (!SRC_DECLARATION_RE.test(cssText)) return null;
+      const srcMatch = cssText.match(/src\s*:\s*([^;}]+)[;}]/i);
+      if (!srcMatch) return null;
+      const url = extractFontUrl(srcMatch[1]);
+      if (!url) return null;
+      try {
+        return { cssText, url: new URL(url, document.baseURI).href };
+      } catch (_error) {
+        return null;
+      }
+    });
+
+    const dataUris = await Promise.all(
+      resolved.map((entry) => (entry ? fetchAsDataUri(entry.url) : Promise.resolve(null))),
+    );
+
+    const inlined = [];
+    let totalBytes = 0;
+    for (let index = 0; index < resolved.length; index += 1) {
+      const entry = resolved[index];
+      const dataUri = dataUris[index];
+      if (!entry || !dataUri) continue;
+      const approxBytes = dataUri.length * 0.75;
+      if (totalBytes + approxBytes > MAX_TOTAL_FONT_BYTES) break;
+      totalBytes += approxBytes;
+      inlined.push(entry.cssText.replace(SRC_DECLARATION_RE, `src: url("${dataUri}")`));
+    }
+    return inlined.length > 0 ? inlined.join("\n") : null;
+  }
+
+  function stripExternal(clone) {
+    const images = clone.querySelectorAll("img");
+    for (let index = 0; index < images.length; index += 1) {
+      const src = images[index].getAttribute("src");
+      if (src && !src.startsWith("data:")) images[index].removeAttribute("src");
+    }
+
+    const elements = clone.querySelectorAll("*");
+    for (let index = 0; index < elements.length; index += 1) {
+      const style = elements[index].style.cssText;
+      if (style && style.includes("url(")) {
+        elements[index].style.cssText = style.replace(
+          /url\(["']?(?!data:)[^)"']*["']?\)/gi,
+          "none",
+        );
+      }
+    }
+  }
+
+  function emitScroll() {
+    scrollRaf = 0;
+    if (!scrollForwarding) return;
+    postToTrustedTop({
+      type: "INLINE_EDIT_SCROLL",
+      scrollX: window.scrollX,
+      scrollY: window.scrollY,
+    });
+  }
+
+  window.addEventListener(
+    "scroll",
+    function () {
+      if (!scrollForwarding || scrollRaf) return;
+      scrollRaf = requestAnimationFrame(emitScroll);
+    },
+    { passive: true, capture: true },
+  );
+
+  async function handleCaptureRequest(event) {
+    const requestId = event.data.requestId;
+    const scrollX = window.scrollX;
+    const scrollY = window.scrollY;
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+
+    function postResult(dataUrl) {
+      postToTrustedTop({
+        type: "INLINE_EDIT_SCREENSHOT_RESULT",
+        requestId,
+        dataUrl,
+        scrollX,
+        scrollY,
+      });
+    }
+
+    try {
+      // Wait for any pending web fonts to resolve so both inline metrics and
+      // the @font-face inlining below see the same loaded faces.
+      if (document.fonts && document.fonts.ready) {
+        try {
+          await document.fonts.ready;
+        } catch (_error) {}
+      }
+
+      const clone = document.documentElement.cloneNode(true);
+      inlineAll(document.documentElement, clone);
+
+      const removedNodes = clone.querySelectorAll("script,link[rel=\"stylesheet\"],style");
+      for (let index = 0; index < removedNodes.length; index += 1) {
+        removedNodes[index].remove();
+      }
+
+      stripExternal(clone);
+
+      // Re-embed web fonts as data-URI @font-face rules so the SVG rasterizer
+      // can resolve them — external font URLs aren't fetched during
+      // foreignObject rendering, which would otherwise force a fallback face
+      // and change text metrics.
+      const inlinedFontCss = await buildInlinedFontCss();
+      if (inlinedFontCss) {
+        const styleEl = document.createElement("style");
+        styleEl.textContent = inlinedFontCss;
+        const head = clone.querySelector("head");
+        if (head) head.appendChild(styleEl);
+        else clone.insertBefore(styleEl, clone.firstChild);
+      }
+
+      const html = new XMLSerializer().serializeToString(clone);
+      const svg =
+        `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">` +
+        '<foreignObject width="100%" height="100%">' +
+        `<div xmlns="http://www.w3.org/1999/xhtml" style="width:${width}px;height:${height}px;overflow:hidden">` +
+        `<div style="position:relative;left:-${scrollX}px;top:-${scrollY}px">` +
+        html +
+        "</div></div></foreignObject></svg>";
+      const svgUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+      const image = new Image();
+      image.onload = function () {
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext("2d").drawImage(image, 0, 0);
+        postResult(canvas.toDataURL("image/png"));
+      };
+      image.onerror = function () {
+        postResult(null);
+      };
+      image.src = svgUrl;
+    } catch (_error) {
+      postResult(null);
+    }
+  }
+
+  window.addEventListener("message", function (event) {
+    if (!event.data) return;
+    // Only accept messages from the direct parent frame. Blocks sibling /
+    // unrelated-window postMessage senders that could otherwise reach us.
+    if (event.source !== window.parent) return;
+
+    const trustedParentOrigin = getTrustedParentOrigin(event);
+    if (!trustedParentOrigin) return;
+    trustedTopOrigin = trustedParentOrigin;
+
+    if (event.data.type === "INLINE_EDIT_SCROLL_START") {
+      scrollForwarding = true;
+      emitScroll();
+      return;
+    }
+
+    if (event.data.type === "INLINE_EDIT_SCROLL_STOP") {
+      scrollForwarding = false;
+      if (scrollRaf) cancelAnimationFrame(scrollRaf);
+      scrollRaf = 0;
+      return;
+    }
+
+    if (event.data.type === "INLINE_EDIT_SCROLL_BY") {
+      const { deltaX, deltaY, deltaMode } = event.data;
+      if (!scrollForwarding || !Number.isFinite(deltaX) || !Number.isFinite(deltaY)) return;
+      if (deltaMode !== 0 && deltaMode !== 1 && deltaMode !== 2) return;
+      const lineHeight =
+        parseFloat(getComputedStyle(document.documentElement).lineHeight) || DEFAULT_LINE_HEIGHT;
+      const scaleX = deltaMode === 1 ? lineHeight : deltaMode === 2 ? window.innerWidth : 1;
+      const scaleY = deltaMode === 1 ? lineHeight : deltaMode === 2 ? window.innerHeight : 1;
+      // The selection overlay receives the wheel event instead of this iframe.
+      // Instant scrolling preserves trackpad deltas even on smooth-scroll sites.
+      window.scrollBy({ left: deltaX * scaleX, top: deltaY * scaleY, behavior: "instant" });
+      emitScroll();
+      return;
+    }
+
+    if (event.data.type !== "INLINE_EDIT_CAPTURE_REQUEST") return;
+
+    handleCaptureRequest(event);
+  });
+})();
+
+
+</script></body>
+</html>
